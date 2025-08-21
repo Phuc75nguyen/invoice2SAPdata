@@ -1,4 +1,5 @@
 # Project structure
+```
 invoice_etl_tool/
 ├── app.py                   # Code Streamlit (UI)
 ├── invoice_parsers/         # Package chứa các parser theo nhà cung cấp
@@ -12,3 +13,4 @@ invoice_etl_tool/
 ├── transform.py             # Hàm chuẩn hóa + mapping JSON (nếu cần tách riêng)
 ├── excel_export.py          # Hàm tạo DataFrame và xuất Excel
 └── requirements.txt
+```
