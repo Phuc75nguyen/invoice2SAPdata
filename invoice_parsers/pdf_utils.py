@@ -1,0 +1,1 @@
+# pdf_utls ơ đây là các hàm tiện ích để xử lý PDF
