@@ -6,7 +6,8 @@ representation. Each parser handles the idiosyncratic layout and
 terminology of a single service provider's invoices. They should
 inherit from ``BaseInvoiceParser`` and implement the :meth:`parse_pdf`
 method. Parsers should not perform any business logic beyond
-extracting factual data from the document.
+extracting factual data from the document. Transformation into
+accounting journal entries belongs in the ``transform`` module.
 
 The structured representation returned by :meth:`parse_pdf` is a
 dictionary with at least the following keys:

@@ -1,7 +1,7 @@
 """
 Low‑level utilities for working with PDF files.
 
-This module wraps PyMuPDF (also known as fitz) to provide a simple
+This module wraps pymupdf (also known as fitz) to provide a simple
 interface for extracting text from PDF documents. If a document
 contains a text layer, the extracted string will include all visible
 text. If the document is purely scanned images and no text is
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Iterable
 
 import fitz  # PyMuPDF
 
@@ -45,6 +46,9 @@ def extract_text(pdf_path: str | Path) -> str:
     for page_num in range(doc.page_count):
         try:
             page = doc.load_page(page_num)
+            # `get_text()` returns the text layer of the page. The default
+            # format is plain text. We append an explicit newline to
+            # delineate page breaks.
             page_text = page.get_text()
             text_parts.append(page_text)
         except Exception as e:

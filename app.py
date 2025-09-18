@@ -1,28 +1,106 @@
-# app.py (Streamlit)
-import streamlit as st
-from invoice_parsers import mobifone_parser, viettel_parser, vnpt_parser
-from excel_export import export_to_excel
+"""
+Example Streamlit application for invoice extraction and SAP export.
 
-st.title("Invoice Data Extraction Tool")
-uploaded_files = st.file_uploader("Upload PDF invoices", type=["pdf"], accept_multiple_files=True)
-if st.button("Extract and Convert"):
-    all_invoices_data = []
-    for file in uploaded_files:
-        # Lưu file tạm hoặc đọc trực tiếp bytes
-        pdf_path = save_temp(file)
-        # Xác định loại hóa đơn
-        provider = identify_provider(pdf_path)  # hàm đọc nhanh vài dòng đầu tìm tên nhà mạng
-        # Gọi parser tương ứng
-        if provider == "Mobifone":
-            data = mobifone_parser.parse(pdf_path)
-        elif provider == "Viettel":
-            data = viettel_parser.parse(pdf_path)
-        elif provider == "VNPT":
-            data = vnpt_parser.parse(pdf_path)
-        else:
-            data = generic_parser.parse(pdf_path)  # parser dự phòng hoặc thông báo không xác định
-        all_invoices_data.append(data)
-    # Xuất tất cả dữ liệu ra file Excel
-    output_path = export_to_excel(all_invoices_data, template="template.xlsx")
-    st.success(f"Đã xử lý {len(all_invoices_data)} hóa đơn")
-    st.download_button("Tải file Excel", data=open(output_path, "rb").read(), file_name="Invoices.xlsx")
+This script demonstrates how to build a simple user interface around
+the parsing and transformation utilities provided by the
+``invoice2SAPdata`` package. Users can upload one or more PDF
+invoices, select the provider, and download an Excel workbook
+containing the corresponding accounting entries.
+
+To run this application locally, execute the following command from
+the root of the project:
+
+    streamlit run invoice2SAPdata/app.py
+
+"""
+
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+from typing import List
+
+import streamlit as st
+
+
+
+from invoice2SAPdata import get_parser
+from invoice2SAPdata.transform import TransformConfig, invoices_to_ledger_rows
+from invoice2SAPdata.excel_export import export_rows_to_excel
+
+
+def main() -> None:
+    st.title("Invoice to SAP Data Extraction")
+    st.write(
+        "Tải lên các file PDF hóa đơn và trích xuất dữ liệu vào file Excel theo định dạng SAP."
+    )
+    provider = st.selectbox(
+        "Nhà cung cấp dịch vụ", options=["Mobifone", "VNPT", "Viettel"]
+    )
+    uploaded_files = st.file_uploader(
+        "Chọn một hoặc nhiều file PDF", type=["pdf"], accept_multiple_files=True
+    )
+    vendor_code = st.text_input("Mã đối tác (BP Code)", value="V00000262")
+    vendor_name = st.text_input(
+        "Tên đối tác", value="CÔNG TY DỊCH VỤ MOBIFONE KHU VỰC 2"
+    )
+    vendor_tax = st.text_input("Mã số thuế (MST)", value="0100686209-002")
+    vendor_address = st.text_input(
+        "Địa chỉ đối tác", value="MM18 Trương Sơn, Phường 14, Quận 10, Thành phố Hồ Chí Minh"
+    )
+    period = st.text_input("Kỳ (period)", value="T12.24")
+    if st.button("Trích xuất và tạo Excel"):
+        if not uploaded_files:
+            st.warning("Vui lòng tải lên ít nhất một file PDF.")
+            return
+        parser_module = None
+        try:
+            parser_module = get_parser(provider.lower())
+        except ImportError as e:
+            st.error(str(e))
+            return
+        invoices: List[dict] = []
+        for file in uploaded_files:
+            # Write the uploaded bytes to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(file.read())
+                tmp_path = Path(tmp.name)
+            try:
+                invoice_data = parser_module.parse_pdf(tmp_path)
+                invoices.append(invoice_data)
+            except Exception as e:
+                st.error(f"Lỗi khi phân tích file {file.name}: {e}")
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        if not invoices:
+            st.warning("Không có hóa đơn nào được phân tích thành công.")
+            return
+        config = TransformConfig(
+            vendor_code=vendor_code,
+            vendor_name=vendor_name,
+            vendor_tax_code=vendor_tax,
+            vendor_address=vendor_address,
+            period=period,
+            description_template=f"CP DIEN THOAI {provider.upper()} {{period}} - HD{{invoice_no}}",
+            remarks_template="",
+            cfw_id="",
+        )
+        rows = invoices_to_ledger_rows(invoices, config)
+        # Create a temporary output file and export
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=".xlsx", prefix="invoice_export_"
+        ) as out_tmp:
+            out_path = Path(out_tmp.name)
+        export_rows_to_excel(rows, out_path)
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="Tải file Excel kết quả",
+                data=f.read(),
+                file_name=f"export_{provider.lower()}_{period}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        out_path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()

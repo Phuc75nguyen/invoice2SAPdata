@@ -25,8 +25,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 
-from base_parser import BaseInvoiceParser
-from pdf_utils import extract_text
+from .base_parser import BaseInvoiceParser
+from .pdf_utils import extract_text
 
 
 class MobifoneInvoiceParser(BaseInvoiceParser):
@@ -60,8 +60,11 @@ class MobifoneInvoiceParser(BaseInvoiceParser):
         float
             The numeric value of the amount.
         """
+        # Remove spaces
         cleaned = value.replace("\xa0", "").strip()
+        # Replace any comma decimal separator with a dot
         cleaned = cleaned.replace(",", ".")
+        # Remove thousands separators (periods)
         cleaned = cleaned.replace(".", "")
         try:
             return float(cleaned)
@@ -70,7 +73,7 @@ class MobifoneInvoiceParser(BaseInvoiceParser):
 
     def parse_pdf(self, pdf_path: str | Path) -> Dict[str, Any]:
         text = extract_text(pdf_path)
-        # Collapse whitespace to simplify regex matching
+        # Remove excessive whitespace and unify separators
         normalised = re.sub(r"\s+", " ", text)
         result: Dict[str, Any] = {
             "invoice_no": "",
@@ -117,19 +120,12 @@ class MobifoneInvoiceParser(BaseInvoiceParser):
         return result
 
 
+# Provide a module level convenience function
 def parse_pdf(pdf_path: str | Path) -> Dict[str, Any]:
-    """Convenience wrapper to parse a Mobifone invoice.
+    """Parse a Mobifone PDF invoice via the default parser.
 
-    Parameters
-    ----------
-    pdf_path : str or Path
-        Path to the PDF file to parse.
-
-    Returns
-    -------
-    dict
-        Parsed invoice data containing keys ``invoice_no``, ``serial_no``,
-        ``invoice_date`` and ``lines``.
+    This function instantiates a :class:`MobifoneInvoiceParser` and
+    delegates to its :meth:`parse_pdf` method.
     """
     parser = MobifoneInvoiceParser()
     return parser.parse_pdf(pdf_path)

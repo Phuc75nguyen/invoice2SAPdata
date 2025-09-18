@@ -1,1 +1,17 @@
-# chứa các requirements cần thiết cho dự án
+
+# Required Python packages for running the invoice extraction tool
+
+# Streamlit: interactive web app framework
+streamlit>=1.27
+
+# Pandas: data manipulation and Excel export
+pandas>=2.0
+
+# openpyxl: Excel writer used by pandas
+openpyxl>=3.1
+
+# PyMuPDF (fitz): PDF text extraction
+PyMuPDF>=1.22
+
+# Use dataclasses for configuration objects (available natively in Python 3.7+)
+# If you are using Python 3.6, install dataclasses separately.
