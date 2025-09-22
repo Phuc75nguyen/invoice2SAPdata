@@ -30,41 +30,67 @@ from .pdf_utils import extract_text
 
 
 class MobifoneInvoiceParser(BaseInvoiceParser):
-    """Concrete parser implementation for Mobifone invoices."""
+    """Concrete parser implementation for Mobifone invoices.
 
-    # Regular expressions to extract key fields
-    _serial_pattern = re.compile(r"Ký\s*hiệu[^:]*[:\s]\s*([A-Z0-9]{4,})", re.IGNORECASE)
-    _number_pattern = re.compile(r"Số\s*(?:\(No\.\))?[^:]*[:\s]\s*(\d+)", re.IGNORECASE)
-    _date_pattern = re.compile(
-        r"Ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})\s+năm\s+(\d{4})", re.IGNORECASE
+    This implementation attempts to cope with the layout of Mobifone's
+    electronic invoices where the serial number, invoice number and
+    amount fields may not appear in the expected order. The parser
+    first tries to extract the serial and invoice numbers together (the
+    serial appears before the invoice number) and falls back to more
+    generic patterns if that fails. Service lines are detected by
+    locating four numeric fields in the order total–VAT–VAT rate–base
+    immediately before the service description. Duplicate lines are
+    removed before returning the results.
+    """
+
+    # Combined pattern matching "<serial> <invoice> Ký hiệu Số"
+    _serial_number_combo_pattern = re.compile(
+        r"\b([A-Z0-9]{4,})\s+(\d{4,})\s+Ký\s*hiệu\s*Số",
+        re.IGNORECASE,
     )
-    # Pattern matching a service line: base amount, VAT %, VAT amount, total
+    # Fallback patterns to extract serial and invoice separately
+    _serial_pattern = re.compile(
+        r"Ký\s*hiệu[^:]*[:\s]\s*([A-Z0-9]{4,})",
+        re.IGNORECASE,
+    )
+    _number_pattern = re.compile(
+        r"Số\s*(?:\(No\.\))?[^:]*[:\s]\s*(\d+)",
+        re.IGNORECASE,
+    )
+    _date_pattern = re.compile(
+        r"Ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})\s+năm\s+(\d{4})",
+        re.IGNORECASE,
+    )
+    # Pattern matching four numeric fields: total, VAT, rate, base before the word "Cước"
     _line_pattern = re.compile(
-        r"([0-9][0-9\.,]*)\s+(\d{1,2})%\s+([0-9][0-9\.,]*)\s+([0-9][0-9\.,]*)"
+        r"([0-9][0-9\.\,]*)\s+([0-9][0-9\.\,]*)\s+(\d{1,2})%\s+([0-9][0-9\.\,]*)\s+Cước",
+        re.IGNORECASE,
     )
 
     @staticmethod
     def _parse_number(value: str) -> float:
-        """Convert a formatted monetary string into a float.
+        """
+        Convert a formatted monetary string into a float. Thousands
+        separators (either dot or space) are removed and a comma is
+        converted to a dot for decimal separation. If conversion fails
+        the function returns 0.0.
 
         Parameters
         ----------
         value : str
-            The monetary amount as printed on the invoice. Dots and commas
-            used as thousands separators will be stripped. Commas used as
-            decimal separators will be converted to a dot before
-            conversion.
+            The monetary amount as printed on the invoice.
 
         Returns
         -------
         float
             The numeric value of the amount.
         """
-        # Remove spaces
-        cleaned = value.replace("\xa0", "").strip()
-        # Replace any comma decimal separator with a dot
-        cleaned = cleaned.replace(",", ".")
-        # Remove thousands separators (periods)
+        if not value:
+            return 0.0
+        cleaned = value.replace("\xa0", " ").strip()
+        # replace commas with dots and remove any remaining spaces
+        cleaned = cleaned.replace(",", ".").replace(" ", "")
+        # remove thousands separators (periods)
         cleaned = cleaned.replace(".", "")
         try:
             return float(cleaned)
@@ -72,8 +98,24 @@ class MobifoneInvoiceParser(BaseInvoiceParser):
             return 0.0
 
     def parse_pdf(self, pdf_path: str | Path) -> Dict[str, Any]:
+        """
+        Parse a Mobifone PDF invoice and extract key fields.
+
+        Parameters
+        ----------
+        pdf_path : str or Path
+            Path to the PDF file.
+
+        Returns
+        -------
+        dict
+            A dictionary with keys ``invoice_no``, ``serial_no``,
+            ``invoice_date`` and ``lines``. ``lines`` is a list of
+            dictionaries each containing ``base_amount``, ``vat_rate``,
+            ``vat_amount`` and ``total_amount``.
+        """
+        # Extract raw text from PDF and normalise whitespace
         text = extract_text(pdf_path)
-        # Remove excessive whitespace and unify separators
         normalised = re.sub(r"\s+", " ", text)
         result: Dict[str, Any] = {
             "invoice_no": "",
@@ -81,34 +123,38 @@ class MobifoneInvoiceParser(BaseInvoiceParser):
             "invoice_date": "",
             "lines": [],
         }
-        # Serial number
-        serial_match = self._serial_pattern.search(normalised)
-        if serial_match:
-            result["serial_no"] = serial_match.group(1).strip()
-        # Invoice number
-        number_match = self._number_pattern.search(normalised)
-        if number_match:
-            result["invoice_no"] = number_match.group(1).strip()
-        # Date
+        # Attempt to capture serial and invoice numbers together
+        combo_match = self._serial_number_combo_pattern.search(normalised)
+        if combo_match:
+            serial, number = combo_match.groups()
+            result["serial_no"] = serial.strip()
+            result["invoice_no"] = number.strip()
+        else:
+            # Fallback: separate patterns
+            serial_match = self._serial_pattern.search(normalised)
+            if serial_match:
+                result["serial_no"] = serial_match.group(1).strip()
+            number_match = self._number_pattern.search(normalised)
+            if number_match:
+                result["invoice_no"] = number_match.group(1).strip()
+        # Date extraction
         date_match = self._date_pattern.search(normalised)
         if date_match:
             day, month, year = date_match.groups()
             try:
-                invoice_date = date(
-                    int(year), int(month), int(day)
-                ).isoformat()
+                invoice_date = date(int(year), int(month), int(day)).isoformat()
             except ValueError:
                 invoice_date = ""
             result["invoice_date"] = invoice_date
-        # Parse service lines
-        lines: List[Dict[str, Any]] = []
+        # Extract service lines
+        raw_lines: List[Dict[str, Any]] = []
         for match in self._line_pattern.finditer(normalised):
-            base_raw, rate_raw, vat_raw, total_raw = match.groups()
+            total_raw, vat_raw, rate_raw, base_raw = match.groups()
             base_amount = self._parse_number(base_raw)
             vat_rate = int(rate_raw)
             vat_amount = self._parse_number(vat_raw)
             total_amount = self._parse_number(total_raw)
-            lines.append(
+            raw_lines.append(
                 {
                     "base_amount": base_amount,
                     "vat_rate": vat_rate,
@@ -116,7 +162,20 @@ class MobifoneInvoiceParser(BaseInvoiceParser):
                     "total_amount": total_amount,
                 }
             )
-        result["lines"] = lines
+        # Deduplicate lines because the invoice may repeat the same totals
+        seen: set[tuple] = set()
+        unique_lines: List[Dict[str, Any]] = []
+        for line in raw_lines:
+            key = (
+                line["base_amount"],
+                line["vat_rate"],
+                line["vat_amount"],
+                line["total_amount"],
+            )
+            if key not in seen:
+                seen.add(key)
+                unique_lines.append(line)
+        result["lines"] = unique_lines
         return result
 
 

@@ -22,8 +22,6 @@ from typing import List
 
 import streamlit as st
 
-
-
 from invoice2SAPdata import get_parser
 from invoice2SAPdata.transform import TransformConfig, invoices_to_ledger_rows
 from invoice2SAPdata.excel_export import export_rows_to_excel
@@ -86,20 +84,19 @@ def main() -> None:
             cfw_id="",
         )
         rows = invoices_to_ledger_rows(invoices, config)
-        # Create a temporary output file and export
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=".xlsx", prefix="invoice_export_"
-        ) as out_tmp:
-            out_path = Path(out_tmp.name)
-        export_rows_to_excel(rows, out_path)
-        with open(out_path, "rb") as f:
-            st.download_button(
-                label="Tải file Excel kết quả",
-                data=f.read(),
-                file_name=f"export_{provider.lower()}_{period}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        out_path.unlink(missing_ok=True)
+        # If no ledger rows were produced, notify the user and skip export
+        if not rows:
+            st.warning("Không có dữ liệu nào để xuất ra file Excel.")
+            return
+        # Generate the Excel workbook in memory
+        excel_buffer = export_rows_to_excel(rows, sheet_name="SAP_Import", index=False)
+        # Provide the buffer directly to Streamlit for download
+        st.download_button(
+            label="Tải file Excel kết quả",
+            data=excel_buffer.getvalue(),
+            file_name=f"export_{provider.lower()}_{period}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 
 if __name__ == "__main__":
