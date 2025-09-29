@@ -42,12 +42,31 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict
 
-from .base_parser import BaseInvoiceParser
-from .pdf_utils import extract_text
+from base_parser import BaseInvoiceParser
+from pdf_utils import extract_text
 
 
 class VNPTInvoiceParser(BaseInvoiceParser):
-    """Concrete parser implementation for VNPT invoices."""
+    """Concrete parser implementation for VNPT invoices.
+
+    This parser has been enhanced to cope with VNPT invoices where the
+    summary monetary figures (base amount, VAT rate, VAT amount and
+    total payment) are not printed on the same lines as their labels.
+
+    Earlier iterations of this parser looked for numbers directly
+    following the labels ``Cộng tiền hàng``, ``Thuế suất thuế GTGT``,
+    ``Tiền thuế GTGT`` and ``Tổng cộng tiền thanh toán``. However, on
+    some invoices these labels appear on separate lines from their
+    corresponding numbers, causing the simple patterns to fail and
+    returning an empty ``lines`` list. To make the parser more robust,
+    we now capture the first instance of the base amount, VAT rate,
+    VAT amount and total payment by looking for a block of numbers
+    surrounding the ``Thuế suất thuế GTGT`` line. In practice, the
+    number immediately preceding the ``VAT rate`` line is the base
+    amount, while the next two numbers are the VAT amount and the
+    grand total. This pattern reliably matches VNPT invoice
+    summaries in the wild.
+    """
 
     # Pattern to capture the invoice serial (Ký hiệu)
     # Pattern to capture the invoice serial (Ký hiệu).
@@ -84,6 +103,19 @@ class VNPTInvoiceParser(BaseInvoiceParser):
     )
     _total_amount_pattern = re.compile(
         r"Tổng\s+cộng\s+tiền\s+thanh\s+toán[^:]*[:\s]*([0-9][0-9\.,]*)",
+        re.IGNORECASE,
+    )
+
+    # Pattern to capture a block of summary numbers. This matches four
+    # numbers in order: base amount, VAT rate, VAT amount and total
+    # amount. The base amount is immediately followed by a ``Thuế suất
+    # thuế GTGT`` line containing the VAT rate, then the next two
+    # numeric tokens are the VAT amount and the grand total. This
+    # pattern uses a reluctant match for the text between the VAT rate
+    # and the following numbers to avoid consuming too much. See
+    # ``parse_pdf`` for how this is used.
+    _amount_block_pattern = re.compile(
+        r"([0-9][0-9\.,]*)\s+Thuế\s+suất\s+thuế\s+GTGT[^0-9]*([0-9]{1,2})%.*?([0-9][0-9\.,]*)\s+([0-9][0-9\.,]*)",
         re.IGNORECASE,
     )
 
@@ -151,17 +183,33 @@ class VNPTInvoiceParser(BaseInvoiceParser):
                 result["invoice_date"] = date(int(year), int(month), int(day)).isoformat()
             except ValueError:
                 result["invoice_date"] = ""
-        # Summary monetary values
-        base_match = self._base_amount_pattern.search(normalised)
-        vat_rate_match = self._vat_rate_pattern.search(normalised)
-        vat_amount_match = self._vat_amount_pattern.search(normalised)
-        total_match = self._total_amount_pattern.search(normalised)
-        base_amount = self._parse_number(base_match.group(1)) if base_match else 0.0
-        vat_rate = int(vat_rate_match.group(1)) if vat_rate_match else 0
-        vat_amount = self._parse_number(vat_amount_match.group(1)) if vat_amount_match else 0.0
-        total_amount = self._parse_number(total_match.group(1)) if total_match else 0.0
-        # Only append a line item if at least one monetary value was found
-        if base_match or vat_amount_match or total_match:
+        # Summary monetary values. VNPT invoices sometimes place the
+        # amounts on separate lines before or after their labels. To
+        # robustly capture these numbers we first attempt to locate a
+        # block of four tokens around the "Thuế suất thuế GTGT" line.
+        base_amount = 0.0
+        vat_rate = 0
+        vat_amount = 0.0
+        total_amount = 0.0
+        block_match = self._amount_block_pattern.search(normalised)
+        if block_match:
+            # Parse each captured token
+            base_amount = self._parse_number(block_match.group(1))
+            vat_rate = int(block_match.group(2)) if block_match.group(2) else 0
+            vat_amount = self._parse_number(block_match.group(3))
+            total_amount = self._parse_number(block_match.group(4))
+        else:
+            # Fallback to original patterns if the block pattern fails
+            base_match = self._base_amount_pattern.search(normalised)
+            vat_rate_match = self._vat_rate_pattern.search(normalised)
+            vat_amount_match = self._vat_amount_pattern.search(normalised)
+            total_match = self._total_amount_pattern.search(normalised)
+            base_amount = self._parse_number(base_match.group(1)) if base_match else 0.0
+            vat_rate = int(vat_rate_match.group(1)) if vat_rate_match else 0
+            vat_amount = self._parse_number(vat_amount_match.group(1)) if vat_amount_match else 0.0
+            total_amount = self._parse_number(total_match.group(1)) if total_match else 0.0
+        # Append a line item if we found at least one monetary value
+        if any([base_amount, vat_amount, total_amount]):
             result["lines"].append(
                 {
                     "base_amount": base_amount,

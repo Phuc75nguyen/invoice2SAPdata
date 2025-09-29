@@ -1,70 +1,57 @@
 """
-Invoice to SAP Data Extraction Package
-This package provides utilities to extract data from telecom invoice PDFs and
-convert them into a structured format suitable for import into SAP.
+Invoice parser package.
 
-Modules
-=======
-
-``pdf_utils``
-    Low‑level helpers to extract text from PDF documents.
-
-``mobifone_parser``
-    Parser for invoices issued by the Mobifone service provider.
-
-``viettel_parser``
-    Parser for invoices issued by the Viettel service provider (placeholder).
-
-``vnpt_parser``
-    Parser for invoices issued by the VNPT service provider (placeholder).
-
-``transform``
-    Functions to map extracted invoice data into SAP journal entries.
-
-``excel_export``
-    Helpers to persist the structured data into Excel files.
-
-``app``
-    Example Streamlit application demonstrating how to combine the
-    parsers, transformation logic and Excel export in an interactive UI.
-
-This package is designed to be modular: each provider’s invoice format is
-encapsulated in its own parser so that adding support for additional
-providers simply requires implementing a new parser module that outputs
-data in the same intermediate schema.
+This package bundles parser implementations for various telecom
+providers and exposes a convenience :func:`get_parser` function to
+dynamically load the appropriate parser based on the provider name.
 """
 
+from __future__ import annotations
+
 from importlib import import_module
+from typing import Any
 
 __all__ = [
+    "base_parser",
     "pdf_utils",
     "mobifone_parser",
     "viettel_parser",
     "vnpt_parser",
-    "transform",
-    "excel_export",
-    "app",
+    "get_parser",
 ]
 
-def get_parser(provider: str):
-    """Dynamically load a parser module for the given provider.
+
+def get_parser(provider: str) -> Any:
+    """Return the parser module for the specified provider.
 
     Parameters
     ----------
-    provider: str
-        Name of the telecom service provider (case insensitive).
+    provider : str
+        Name of the telecom provider (case insensitive). Valid values
+        include ``"mobifone"``, ``"viettel"`` and ``"vnpt"``.
 
     Returns
     -------
     module
-        A module implementing a ``parse_pdf`` function for the provider.
+        The parser module implementing a ``parse_pdf`` function.
 
     Raises
     ------
     ImportError
-        If no parser exists for the specified provider.
+        If an unsupported provider name is supplied.
     """
     provider = provider.lower().strip()
-    if provider not in ("mobifone", "viettel", "vnpt"):
-        raise ImportError(f"No parser implemented for provider: {provider}")
-    return import_module(f"invoice2SAPdata.{provider}_parser")
+    # Delegate to the parsers packaged under invoice2SAPdata.  By referencing
+    # the fully qualified module names here we avoid accidentally loading
+    # the placeholder parsers in this top-level package, which do not
+    # support multi-invoice PDFs.  All supported providers live inside
+    # the ``invoice2SAPdata`` package.
+    module_map = {
+        "mobifone": "invoice2SAPdata.mobifone_parser",
+        "viettel": "invoice2SAPdata.viettel_parser",
+        "vnpt": "invoice2SAPdata.vnpt_parser",
+    }
+    if provider not in module_map:
+        raise ImportError(f"No parser available for provider: {provider}")
+    module_name = module_map[provider]
+    return import_module(module_name)
